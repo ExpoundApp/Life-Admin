@@ -3,14 +3,15 @@ import {
   Home, CalendarDays, Users, Wallet, MoreHorizontal, Plus, Check, Clock,
   AlertTriangle, Shirt, BookOpen, Utensils, Music, Waves, PartyPopper,
   FileText, Bell, Pencil, Trash2, X, ChevronRight, Mail, Sparkles,
-  MapPin, Sun, Inbox, Footprints, Ticket, ShoppingBag, Backpack, Coins, HelpCircle
+  MapPin, Sun, Inbox, Footprints, Ticket, ShoppingBag, Backpack, Coins
 } from "lucide-react";
-import { store } from "./store";
 
 /* ============================================================
    Family Admin — one calm place for two parents to share the load
    A working prototype of the product brief (MVP + differentiators).
    ============================================================ */
+
+const STORAGE_KEY = "familyAdmin:v1";
 
 /* ---- theme ---- */
 const T = {
@@ -44,13 +45,7 @@ const RECUR_ICONS = {
 const midnight = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const today0 = () => midnight(new Date());
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return midnight(x); };
-const iso = (d) => {
-  const x = midnight(d);
-  const y = x.getFullYear();
-  const m = String(x.getMonth() + 1).padStart(2, "0");
-  const day = String(x.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
+const iso = (d) => midnight(d).toISOString().slice(0, 10);
 const parseISO = (s) => midnight(new Date(s + "T00:00:00"));
 const wkday = (d) => WEEKDAYS[new Date(d).getDay()];
 const sameDay = (a, b) => iso(a) === iso(b);
@@ -98,8 +93,8 @@ function seed() {
           { id: uid("p"), label: "PTA summer fair", amount: 5, due: D(-2), status: "due", owner: a1 },
         ],
         clubs: [
-          { id: uid("cl"), name: "Football club", day: "Mon", time: "15:30–16:30", location: "School field", kit: "Boots + shin pads", owner: a1 },
-          { id: uid("cl"), name: "Choir", day: "Wed", time: "Lunchtime", location: "Music room", kit: "", owner: a2 },
+          { id: uid("cl"), name: "Football club", day: "Mon", time: "15:30–16:30", location: "School field", kit: "Boots + shin pads", owner: a1, escort: { type: "adult", adultId: a1 } },
+          { id: uid("cl"), name: "Choir", day: "Wed", time: "Lunchtime", location: "Music room", kit: "", owner: a2, escort: null },
         ],
         forms: [
           { id: uid("f"), label: "Trip consent form", status: "todo", due: D(4), owner: a2 },
@@ -109,9 +104,9 @@ function seed() {
           { id: uid("b"), label: "Parents' evening slot", deadline: D(3), status: "open", note: "Try for after 4pm", owner: a1 },
         ],
         events: [
-          { id: uid("e"), title: "Class assembly", date: D(1), type: "show", costume: false },
-          { id: uid("e"), title: "World Book Day", date: D(6), type: "dressup", costume: true, costumeNote: "Book character" },
-          { id: uid("e"), title: "Sports day", date: D(9), type: "sport", costume: false },
+          { id: uid("e"), title: "Class assembly", date: D(1), type: "show", costume: false, escort: { type: "adult", adultId: a2 } },
+          { id: uid("e"), title: "World Book Day", date: D(6), type: "dressup", costume: true, costumeNote: "Book character", escort: null },
+          { id: uid("e"), title: "Sports day", date: D(9), type: "sport", costume: false, escort: { type: "custom", label: "Grandma Jean" } },
         ],
         parties: [
           { id: uid("pa"), host: "Noah's birthday", date: D(8), status: "rsvp", gift: false },
@@ -132,12 +127,12 @@ function seed() {
           { id: uid("p"), label: "Reception trip — Farm", amount: 8, due: D(1), status: "due", owner: a1 },
         ],
         clubs: [
-          { id: uid("cl"), name: "Tumble Tots", day: "Thu", time: "15:15–16:00", location: "Hall", kit: "Plimsolls", owner: a2 },
+          { id: uid("cl"), name: "Tumble Tots", day: "Thu", time: "15:15–16:00", location: "Hall", kit: "Plimsolls", owner: a2, escort: { type: "adult", adultId: a2 } },
         ],
         forms: [],
         bookings: [],
         events: [
-          { id: uid("e"), title: "Pyjama day", date: D(2), type: "dressup", costume: true, costumeNote: "Wear PJs + bring a teddy" },
+          { id: uid("e"), title: "Pyjama day", date: D(2), type: "dressup", costume: true, costumeNote: "Wear PJs + bring a teddy", escort: null },
         ],
         parties: [],
       },
@@ -145,15 +140,33 @@ function seed() {
     oneoffs: [
       { id: uid("o"), childId: c1, label: "£2 for cake sale", date: D(1), owner: a1, done: false },
     ],
+    diary: [
+      { id: uid("d"), adultId: a2, date: D(0), label: "Work dinner", needsSitter: true, sitterName: "", sitterArrival: "" },
+      { id: uid("d"), adultId: a1, date: D(2), label: "Five-a-side", needsSitter: false, sitterName: "", sitterArrival: "" },
+    ],
     checks: {},
     reviewQueue: [],
   };
 }
 
-/* ---- persistence ----
-   The real load/save/subscribe logic lives in ./store.js, which talks to
-   Supabase (shared, live sync) when configured, or localStorage otherwise.
-   App passes seed() into store.load() for first-run / "create household". */
+/* ---- persistence ---- */
+async function loadState() {
+  try {
+    if (typeof window !== "undefined" && window.storage) {
+      const r = await window.storage.get(STORAGE_KEY);
+      if (r && r.value) return JSON.parse(r.value);
+    }
+  } catch (e) { /* fall through to seed */ }
+  return null;
+}
+let saveTimer = null;
+function saveState(state) {
+  if (typeof window === "undefined" || !window.storage) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try { await window.storage.set(STORAGE_KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+  }, 350);
+}
 
 /* ============================================================
    Small UI primitives
@@ -370,217 +383,87 @@ function OwnerRow({ adults, owner, onPick, compact }) {
   );
 }
 
-/* ============================================================
-   Main App
-   ============================================================ */
-/* ============================================================
-   Beam — the app's original helper character
-   A small glass capsule with a teal liquid fill, echoing the
-   app's own icon. Used in the tutorial walkthrough.
-   ============================================================ */
-function Beam({ size = 120, pose = "wave", style }) {
-  const poses = {
-    wave: { arm: "M142 120 Q166 108 172 84", hand: { x: 172, y: 84 } },
-    point: { arm: "M142 112 Q170 100 184 96", hand: { x: 184, y: 96 } },
-    rest: { arm: "M142 128 Q164 130 170 118", hand: { x: 170, y: 118 } },
-    cheer: { arm: "M142 104 Q168 84 176 60", hand: { x: 176, y: 60 } },
-  };
-  const p = poses[pose] || poses.wave;
-  return (
-    <svg width={size} height={size * 1.1} viewBox="0 0 200 220" style={style}>
-      <defs>
-        <linearGradient id="beamFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3FC9A6" />
-          <stop offset="100%" stopColor="#0E5C4D" />
-        </linearGradient>
-        <linearGradient id="beamGlass" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.8" />
-          <stop offset="100%" stopColor="#D8EFE9" stopOpacity="0.35" />
-        </linearGradient>
-      </defs>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <rect key={i} x={92 + i * 6 - 12} y="8" width="5" height="20" rx="2.5"
-          fill="#F2C14E" transform={`rotate(${(i - 2) * 14} 100 18)`} opacity="0.9" />
-      ))}
-      <rect x="55" y="40" width="90" height="130" rx="38" fill="url(#beamGlass)" stroke="#FFFFFF" strokeWidth="3" />
-      <rect x="55" y="40" width="90" height="130" rx="38" fill="none" stroke="#137A66" strokeOpacity="0.2" strokeWidth="2" />
-      <clipPath id="beamClip"><rect x="55" y="40" width="90" height="130" rx="38" /></clipPath>
-      <rect x="55" y="105" width="90" height="65" fill="url(#beamFill)" clipPath="url(#beamClip)" opacity="0.92" />
-      <rect x="66" y="52" width="12" height="55" rx="6" fill="#fff" opacity="0.5" />
-      <ellipse cx="80" cy="103" rx="8" ry="10" fill="#0E3D33" />
-      <ellipse cx="120" cy="103" rx="8" ry="10" fill="#0E3D33" />
-      <circle cx="77.5" cy="99.5" r="2.3" fill="#fff" />
-      <circle cx="117.5" cy="99.5" r="2.3" fill="#fff" />
-      <path d="M78 122 Q100 136 122 122" stroke="#0E3D33" strokeWidth="4" fill="none" strokeLinecap="round" />
-      <ellipse cx="68" cy="113" rx="6" ry="4" fill="#F2845C" opacity="0.3" />
-      <ellipse cx="132" cy="113" rx="6" ry="4" fill="#F2845C" opacity="0.3" />
-      <path d={p.arm} stroke="#3FC9A6" strokeWidth="9" fill="none" strokeLinecap="round" />
-      <circle cx={p.hand.x} cy={p.hand.y} r="9" fill="#3FC9A6" stroke="#fff" strokeWidth="2" />
-      <rect x="68" y="168" width="64" height="14" rx="7" fill="#0E5C4D" opacity="0.5" />
-    </svg>
-  );
+/* ---- escort label helper (who's physically taking/collecting) ---- */
+function escortLabel(escort, adultById) {
+  if (!escort) return null;
+  if (escort.type === "custom") return escort.label || "Someone else";
+  if (escort.type === "adult") return adultById(escort.adultId)?.name || null;
+  return null;
 }
 
-/* ============================================================
-   Tutorial — Beam walks through the app's main screens.
-   Shown once automatically the first time someone reaches the
-   main app on a given device, replayable any time via the help
-   icon in the header. Tracked in localStorage (per device), not
-   in the synced household state — so each parent sees it once
-   on their own device, and dismissing it doesn't hide it for
-   the other parent.
-   ============================================================ */
-const TUTORIAL_KEY = "familyAdmin:tutorialSeen";
-const TUTORIAL_STEPS = [
-  {
-    pose: "wave",
-    title: "This is Today",
-    body: "Your glanceable home screen. It shows what each kid needs today and tomorrow — kit, lunch, costumes, anything urgent. It's read-only on purpose: editing happens in Week and Kids.",
-  },
-  {
-    pose: "point",
-    title: "Week is your calendar",
-    body: "Every dated thing — trips, payments, deadlines, forms — lands here for the next two weeks. \"Who's got what\" shows tasks grouped by the parent who owns them.",
-  },
-  {
-    pose: "rest",
-    title: "Kids is where you set things up",
-    body: "Each child gets their own school, lunch schedule, weekly kit list, clubs, and key dates. Turn whole modules on or off per child — only show what that family actually needs.",
-  },
-  {
-    pose: "cheer",
-    title: "Money tracks payments & lunch balance",
-    body: "A simple checklist for trips, photos, and fundraisers, plus a lunch balance tracker with a reliable low-balance reminder — no school system silently failing to warn you.",
-  },
-  {
-    pose: "point",
-    title: "Paste in an email or WhatsApp message",
-    body: "In the More tab, tap \"Paste an email or newsletter.\" Copy the text from an email, newsletter, or WhatsApp message and paste it in — I'll suggest dates, payments, and forms. Nothing's added automatically: you review and confirm each one first, so you stay in control.",
-  },
-  {
-    pose: "wave",
-    title: "One parent owns each task",
-    body: "Tap any avatar to assign an owner. One person handles it end-to-end, so nothing quietly becomes the default parent's job. Tap the help icon any time to see this again.",
-  },
-];
+/* ---- inline picker: parents + a free-text "someone else" option ---- */
+function EscortPicker({ adults, value, onChange }) {
+  const isCustom = value?.type === "custom";
+  const [customText, setCustomText] = useState(isCustom ? (value.label || "") : "");
 
-const tutorialShell = {
-  position: "fixed", inset: 0, background: T.bg, zIndex: 90,
-  display: "flex", justifyContent: "center", overflowY: "auto",
-};
-function Tutorial({ onDone }) {
-  const [i, setI] = useState(0);
-  const step = TUTORIAL_STEPS[i];
-  const last = i === TUTORIAL_STEPS.length - 1;
+  const pickAdult = (adultId) => {
+    if (value?.type === "adult" && value.adultId === adultId) onChange(null);
+    else onChange({ type: "adult", adultId });
+  };
+  const pickCustom = () => {
+    if (isCustom) { onChange(null); setCustomText(""); }
+    else onChange({ type: "custom", label: customText });
+  };
+  const onCustomTextChange = (txt) => {
+    setCustomText(txt);
+    onChange({ type: "custom", label: txt });
+  };
+
   return (
-    <div style={tutorialShell}>
-      <div style={{ width: "100%", maxWidth: 460, minHeight: "100vh", display: "flex", flexDirection: "column", padding: "20px 22px 28px" }}>
-        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-          <IconBtn icon={X} label="Close tutorial" onClick={onDone} />
-        </div>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
-          <Beam size={130} pose={step.pose} />
-          <h2 style={{ font: "700 23px Bricolage Grotesque", color: T.ink, margin: "20px 0 8px" }}>{step.title}</h2>
-          <p style={{ font: "500 14.5px Inter", color: T.muted, lineHeight: 1.6, maxWidth: 320 }}>{step.body}</p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 18, justifyContent: "center" }}>
-          {TUTORIAL_STEPS.map((_, k) => (
-            <div key={k} style={{ width: k === i ? 20 : 7, height: 7, borderRadius: 999, background: k === i ? T.brand : T.line, transition: "width .15s" }} />
-          ))}
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          {i > 0 && <Button variant="line" style={{ flex: 1 }} onClick={() => setI(i - 1)}>Back</Button>}
-          <Button style={{ flex: 2 }} onClick={() => (last ? onDone() : setI(i + 1))} icon={last ? Check : ChevronRight}>
-            {last ? "Got it" : "Next"}
-          </Button>
-        </div>
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {adults.map((a) => {
+          const on = value?.type === "adult" && value.adultId === a.id;
+          return (
+            <button key={a.id} onClick={() => pickAdult(a.id)} style={{
+              display: "flex", alignItems: "center", gap: 7, padding: "7px 12px 7px 5px", borderRadius: 999,
+              border: `1.5px solid ${on ? T.brand : T.line}`, background: on ? T.brandSoft : T.card, cursor: "pointer",
+            }}><Avatar adult={a} size={22} /><span style={{ font: "600 13.5px Inter", color: T.ink }}>{a.name}</span></button>
+          );
+        })}
+        <button onClick={pickCustom} style={{
+          display: "flex", alignItems: "center", gap: 7, padding: "7px 12px 7px 8px", borderRadius: 999,
+          border: `1.5px solid ${isCustom ? T.brand : T.line}`, background: isCustom ? T.brandSoft : T.card, cursor: "pointer",
+        }}><Users size={16} color={isCustom ? T.brand : T.faint} /><span style={{ font: "600 13.5px Inter", color: T.ink }}>Someone else</span></button>
       </div>
+      {isCustom && (
+        <div style={{ marginTop: 10 }}>
+          <TextInput autoFocus value={customText} placeholder="e.g. Grandma Jean, or Noah's mum"
+            onChange={(e) => onCustomTextChange(e.target.value)} />
+        </div>
+      )}
     </div>
   );
 }
 
+/* ============================================================
+   Main App
+   ============================================================ */
 export default function App() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState(undefined);   // undefined = checking, null = signed out
-  const [household, setHousehold] = useState(store.getHouseholdCode()); // null until chosen
   const [tab, setTab] = useState("today");
   const [modal, setModal] = useState(null); // {type, data}
   const [activeChildId, setActiveChildId] = useState(null);
   const [toast, setToast] = useState(null);
-  const [showTutorial, setShowTutorial] = useState(false);
-  const skipNextSave = useRef(false);
 
-  // Resolve who's signed in (cloud mode), and keep it current
   useEffect(() => {
-    let unsub = () => {};
     (async () => {
-      setUser(await store.getUser());
-      unsub = store.onAuth((u) => setUser(u));
-    })();
-    return () => unsub();
-  }, []);
-
-  // Load + subscribe whenever we have both a signed-in user and a household code
-  useEffect(() => {
-    if (user === undefined) return;                 // still checking auth
-    if (store.needsAuth() && !user) { setLoading(false); return; } // need sign-in first
-    if (!household) { setLoading(false); return; }
-    let unsub = () => {};
-    let cancelled = false;
-    setLoading(true);
-    (async () => {
-      const init = await store.load(household);
-      if (cancelled) return;
-      if (!init) {
-        // membership/household no longer reachable — send back to the gate
-        store.clearHouseholdCode(); setHousehold(null); setLoading(false); return;
-      }
-      skipNextSave.current = true;        // don't immediately re-save what we just loaded
+      const loaded = await loadState();
+      const init = loaded || seed();
+      if (!init.diary) init.diary = [];
       setState(init);
       setActiveChildId(init.children[0]?.id || null);
       setLoading(false);
-      try {
-        if (!localStorage.getItem(TUTORIAL_KEY)) setShowTutorial(true);
-      } catch (e) { /* localStorage unavailable — skip the auto-tutorial, help icon still works */ }
-      // live updates from the other parent's device
-      unsub = store.subscribe(household, (remoteState) => {
-        skipNextSave.current = true;      // applying a remote change shouldn't echo back out
-        setState(remoteState);
-      });
     })();
-    return () => { cancelled = true; unsub(); };
-  }, [household, user]);
+  }, []);
 
-  // Persist local changes (debounced inside the store), skipping loads/remote applies
-  useEffect(() => {
-    if (!state || !household) return;
-    if (skipNextSave.current) { skipNextSave.current = false; return; }
-    store.save(household, state);
-  }, [state, household]);
+  useEffect(() => { if (state) saveState(state); }, [state]);
 
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 1800); };
 
   /* immutable update helper */
   const update = (fn) => setState((prev) => { const next = structuredClone(prev); fn(next); return next; });
-
-  // Signed out (cloud mode) → show sign in / create account
-  if (store.needsAuth() && user === null) {
-    return <AuthScreen />;
-  }
-  if (user === undefined) {
-    return <Splash label="Signing you in…" />;
-  }
-
-  // Signed in but no household chosen on this device → create or join
-  if (!household) {
-    return (
-      <HouseholdGate
-        onCreate={async (code) => { await store.createHousehold(code, seed); store.setHouseholdCode(code); setHousehold(code); }}
-        onJoin={async (code) => { await store.joinHousehold(code); store.setHouseholdCode(code); setHousehold(code); }}
-      />
-    );
-  }
 
   if (loading || !state) {
     return (
@@ -625,28 +508,25 @@ export default function App() {
     const i = s.adults.findIndex((x) => x.id === a.id);
     if (i >= 0) s.adults[i] = { ...s.adults[i], ...a }; else s.adults.push({ id: uid("a"), ...a });
   });
-  const deleteAdult = (id) => update((s) => {
-    s.adults = s.adults.filter((a) => a.id !== id);
-    const ownerKeys = ["recurring", "payments", "clubs", "forms", "bookings"];
-    for (const c of s.children) {
-      for (const key of ownerKeys) {
-        for (const item of c[key] || []) { if (item.owner === id) item.owner = null; }
-      }
-    }
-    for (const o of s.oneoffs) { if (o.owner === id) o.owner = null; }
-  });
+  const deleteAdult = (id) => update((s) => { s.adults = s.adults.filter((a) => a.id !== id); });
 
   const addOneoff = (o) => update((s) => { s.oneoffs.push({ id: uid("o"), done: false, ...o }); });
   const updateOneoff = (o) => update((s) => { const i = s.oneoffs.findIndex((x) => x.id === o.id); if (i >= 0) s.oneoffs[i] = { ...s.oneoffs[i], ...o }; });
   const deleteOneoff = (id) => update((s) => { s.oneoffs = s.oneoffs.filter((o) => o.id !== id); });
 
+  const upsertDiary = (d) => update((s) => {
+    const i = s.diary.findIndex((x) => x.id === d.id);
+    if (i >= 0) s.diary[i] = { ...s.diary[i], ...d };
+    else s.diary.push({ id: uid("d"), needsSitter: false, sitterName: "", sitterArrival: "", ...d });
+  });
+  const deleteDiary = (id) => update((s) => { s.diary = s.diary.filter((d) => d.id !== id); });
+
   const toggleCheck = (key) => update((s) => { s.checks[key] = !s.checks[key]; });
 
   const applyOwner = (target, adultId) => update((s) => {
-    if (target.kind === "oneoff") { const o = s.oneoffs.find((x) => x.id === target.id); if (o) o.owner = adultId; return; }
     const c = s.children.find((x) => x.id === target.childId);
-    if (!c) return;
-    const arr = c[target.key]; const it = arr?.find((x) => x.id === target.id); if (it) it.owner = adultId;
+    if (target.kind === "oneoff") { const o = s.oneoffs.find((x) => x.id === target.id); if (o) o.owner = adultId; return; }
+    const arr = c[target.key]; const it = arr.find((x) => x.id === target.id); if (it) it.owner = adultId;
   });
 
   const addReviewItems = (items) => update((s) => { s.reviewQueue.push(...items); });
@@ -668,10 +548,9 @@ export default function App() {
     state, adults, adultById, childById, update, flash,
     upsertChild, deleteChild, toggleModule, setLunch, setLunchBalance, adjustBalance,
     upsertIn, deleteIn, upsertAdult, deleteAdult, addOneoff, updateOneoff, deleteOneoff,
+    upsertDiary, deleteDiary,
     toggleCheck, applyOwner, openOwner, setModal, addReviewItems, removeReview, confirmReview,
     activeChildId, setActiveChildId, setTab,
-    household, user, switchHousehold: () => { store.clearHouseholdCode(); setHousehold(null); setState(null); },
-    signOut: async () => { store.clearHouseholdCode(); await store.signOut(); setHousehold(null); setState(null); },
   };
 
   const tabs = [
@@ -690,17 +569,11 @@ export default function App() {
         <header style={shell.header}>
           <div>
             <div style={{ font: "600 12px Inter", letterSpacing: "0.06em", textTransform: "uppercase", color: T.faint }}>
-              {greeting()} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              {greeting()} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
             </div>
             <div style={{ font: "700 22px Bricolage Grotesque", color: T.ink, marginTop: 1 }}>{state.settings.householdName}</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-            <button onClick={() => setShowTutorial(true)} aria-label="Replay tutorial" className="fa-iconbtn" style={{
-              border: "none", background: T.brandSoft, color: T.brand, cursor: "pointer", width: 36, height: 36,
-              borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", marginRight: 4,
-            }}>
-              <HelpCircle size={19} strokeWidth={2.2} />
-            </button>
+          <div style={{ display: "flex" }}>
             {adults.map((a) => <span key={a.id} style={{ marginLeft: -6 }}><Avatar adult={a} size={32} /></span>)}
           </div>
         </header>
@@ -739,14 +612,6 @@ export default function App() {
       {/* modals */}
       {modal && <Modals modal={modal} ctx={ctx} close={() => setModal(null)} onReset={resetAll} />}
       {toast && <div className="fa-toast" style={shell.toast}>{toast}</div>}
-
-      {/* tutorial walkthrough — auto-shows once per device, replayable via header help icon */}
-      {showTutorial && (
-        <Tutorial onDone={() => {
-          setShowTutorial(false);
-          try { localStorage.setItem(TUTORIAL_KEY, "1"); } catch (e) { /* ignore */ }
-        }} />
-      )}
     </div>
   );
 }
@@ -757,176 +622,6 @@ function greeting() {
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
-
-/* ============================================================
-   Auth + onboarding shells
-   ============================================================ */
-function Splash({ label }) {
-  return (
-    <div style={{ ...shell.page, alignItems: "center", justifyContent: "center", display: "flex" }}>
-      <GlobalStyle />
-      <div style={{ textAlign: "center", color: T.muted }}>
-        <Sun size={30} className="fa-spin" style={{ color: T.brand }} />
-        <div style={{ marginTop: 10, font: "600 15px Bricolage Grotesque", color: T.ink }}>{label || "Loading…"}</div>
-      </div>
-    </div>
-  );
-}
-
-function AuthShell({ children, sub }) {
-  return (
-    <div style={{ ...shell.page }}>
-      <GlobalStyle />
-      <div style={{ ...shell.frame, justifyContent: "center", padding: "0 22px" }}>
-        <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div style={{ width: 60, height: 60, borderRadius: 18, background: T.brandSoft, display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: 14 }}>
-            <Sun size={30} color={T.brand} strokeWidth={2.2} />
-          </div>
-          <h1 style={{ font: "700 26px Bricolage Grotesque", color: T.ink, margin: 0 }}>Family Admin</h1>
-          {sub && <p style={{ font: "500 14.5px Inter", color: T.muted, marginTop: 8, lineHeight: 1.5 }}>{sub}</p>}
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function AuthScreen() {
-  const [mode, setMode] = useState("signin"); // 'signin' | 'signup'
-  const [email, setEmail] = useState("");
-  const [pw, setPw] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [info, setInfo] = useState("");
-
-  const submit = async () => {
-    setErr(""); setInfo("");
-    if (!email.trim() || pw.length < 6) { setErr("Enter an email and a password of at least 6 characters."); return; }
-    setBusy(true);
-    try {
-      if (mode === "signup") {
-        const { needsConfirm } = await store.signUp(email.trim(), pw);
-        if (needsConfirm) setInfo("Check your email to confirm your account, then sign in.");
-        // if confirmation is off, onAuthStateChange will swap to the app automatically
-      } else {
-        await store.signIn(email.trim(), pw);
-      }
-    } catch (e) {
-      setErr(e.message || "Something went wrong.");
-    } finally { setBusy(false); }
-  };
-
-  return (
-    <AuthShell sub="One calm place for the school chaos — shared by both parents.">
-      <Card>
-        <Field label="Email">
-          <TextInput type="email" autoComplete="email" value={email} placeholder="you@example.com" onChange={(e) => setEmail(e.target.value)} />
-        </Field>
-        <Field label="Password">
-          <TextInput type="password" autoComplete={mode === "signup" ? "new-password" : "current-password"} value={pw} placeholder="At least 6 characters" onChange={(e) => setPw(e.target.value)} />
-        </Field>
-        {err && <p style={{ font: "500 13px Inter", color: T.red, margin: "0 0 10px" }}>{err}</p>}
-        {info && <p style={{ font: "500 13px Inter", color: T.brand, margin: "0 0 10px" }}>{info}</p>}
-        <Button style={{ width: "100%" }} icon={Check} onClick={submit}>
-          {busy ? "Just a moment…" : mode === "signup" ? "Create account" : "Sign in"}
-        </Button>
-        <button onClick={() => { setMode(mode === "signup" ? "signin" : "signup"); setErr(""); setInfo(""); }} style={{
-          width: "100%", marginTop: 12, border: "none", background: "transparent", cursor: "pointer",
-          font: "600 13.5px Inter", color: T.muted,
-        }}>
-          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
-      </Card>
-      <p style={{ font: "500 12px Inter", color: T.faint, textAlign: "center", marginTop: 14, lineHeight: 1.6 }}>
-        Your data is private to your household — only people you invite with your code, signed into their own account, can see it.
-      </p>
-    </AuthShell>
-  );
-}
-
-/* ============================================================
-   Household gate — create or join, so both parents share one dataset
-   ============================================================ */
-function makeCode() {
-  // friendly, readable household code e.g. "OAKMEADOW-4271" — large pool to avoid clashes
-  const a = ["OAK", "FOX", "PINE", "BIRCH", "WREN", "MOSS", "FERN", "DOVE", "REED", "SAGE", "ELM", "HAWK", "LARK", "ROWAN", "HEATH", "VALE", "BROOK", "GLEN", "MARSH", "WILLOW"];
-  const b = ["MEADOW", "FIELD", "HOLLOW", "RIDGE", "DELL", "COPSE", "BANK", "GROVE", "PATH", "GATE"];
-  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-  return pick(a) + pick(b) + "-" + Math.floor(1000 + Math.random() * 9000);
-}
-
-function HouseholdGate({ onCreate, onJoin }) {
-  const [mode, setMode] = useState(null); // 'create' | 'join'
-  const [code, setCode] = useState("");
-  const [newCode, setNewCode] = useState(makeCode);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const live = store.isCloud();
-
-  const run = async (fn, value) => {
-    setErr(""); setBusy(true);
-    try { await fn(value); } catch (e) {
-      const msg = e.message || "Something went wrong.";
-      // if the suggested code was taken, roll a fresh one automatically
-      if (/taken|duplicate/i.test(msg)) { setNewCode(makeCode()); setErr("That code was taken — here's a fresh one, tap Start again."); }
-      else setErr(msg);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <AuthShell sub="Create your family's space, or join your partner's.">
-      {!mode && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Button onClick={() => setMode("create")} icon={Plus}>Create a new household</Button>
-          <Button variant="line" onClick={() => setMode("join")} icon={Users}>Join with a code</Button>
-          {store.needsAuth() && (
-            <button onClick={() => store.signOut()} style={{ marginTop: 6, border: "none", background: "transparent", cursor: "pointer", font: "600 13px Inter", color: T.faint }}>Sign out</button>
-          )}
-          {!live && (
-            <p style={{ font: "500 12px Inter", color: T.faint, textAlign: "center", marginTop: 8, lineHeight: 1.5 }}>
-              Running in single-device mode (no cloud keys set). Add Supabase keys to sync between phones — see the README.
-            </p>
-          )}
-        </div>
-      )}
-
-      {mode === "create" && (
-        <Card>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <div style={{ font: "600 13px Inter", color: T.muted }}>Your household code</div>
-            <button onClick={() => { setErr(""); setNewCode(makeCode()); }} style={{ border: "none", background: "transparent", cursor: "pointer", font: "600 12.5px Inter", color: T.brand }}>↻ New code</button>
-          </div>
-          <div style={{ font: "800 30px Bricolage Grotesque", color: T.brand, letterSpacing: "0.05em", textAlign: "center", padding: "10px 0" }}>{newCode}</div>
-          <p style={{ font: "500 13px Inter", color: T.muted, lineHeight: 1.55, margin: "6px 0 14px" }}>
-            {live
-              ? "Share this code with your partner. When they sign in and tap “Join with a code”, you'll both see the same items live."
-              : "Cloud sync isn't configured yet, so this device keeps its own copy. Add Supabase keys (README) to sync across phones."}
-          </p>
-          {err && <p style={{ font: "500 13px Inter", color: T.red, margin: "0 0 10px" }}>{err}</p>}
-          <div style={{ display: "flex", gap: 10 }}>
-            <Button variant="line" style={{ flex: 1 }} onClick={() => setMode(null)}>Back</Button>
-            <Button style={{ flex: 1 }} icon={Check} onClick={() => run(onCreate, newCode)}>{busy ? "…" : "Start"}</Button>
-          </div>
-        </Card>
-      )}
-
-      {mode === "join" && (
-        <Card>
-          <Field label="Enter your household code">
-            <TextInput autoFocus value={code} placeholder="e.g. OAK-4271" onChange={(e) => setCode(e.target.value.toUpperCase())} />
-          </Field>
-          {err && <p style={{ font: "500 13px Inter", color: T.red, margin: "0 0 10px" }}>{err}</p>}
-          <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            <Button variant="line" style={{ flex: 1 }} onClick={() => setMode(null)}>Back</Button>
-            <Button style={{ flex: 1 }} icon={Check} onClick={() => code.trim() && run(onJoin, code.trim())}>{busy ? "…" : "Join"}</Button>
-          </div>
-        </Card>
-      )}
-    </AuthShell>
-  );
-}
-
 
 /* ============================================================
    Needs engine — what does each kid need on a given date?
@@ -948,12 +643,13 @@ function needsForChild(child, dateISO, checks, oneoffs) {
     const key = `lunch:${child.id}:${dateISO}`;
     items.push({ key, label: "Packed lunch", icon: "food", owner: null, done: !!checks[key], kind: "lunch" });
   }
-  // clubs needing kit that day
+  // clubs needing kit, or with someone assigned to take/collect, that day
   if (child.modules?.clubs) {
     for (const cl of child.clubs) {
-      if (cl.day === wd && cl.kit) {
+      if (cl.day === wd && (cl.kit || cl.escort)) {
         const key = `club:${child.id}:${cl.id}:${dateISO}`;
-        items.push({ key, label: `${cl.name}: ${cl.kit}`, icon: "shoe", owner: cl.owner, done: !!checks[key], kind: "club" });
+        const label = cl.kit ? `${cl.name}: ${cl.kit}` : cl.name;
+        items.push({ key, label, icon: "shoe", owner: cl.owner, escort: cl.escort, done: !!checks[key], kind: "club" });
       }
     }
   }
@@ -962,7 +658,7 @@ function needsForChild(child, dateISO, checks, oneoffs) {
     for (const e of child.events) {
       if (e.date === dateISO && e.costume) {
         const key = `evt:${e.id}`;
-        items.push({ key, label: `${e.title}${e.costumeNote ? " — " + e.costumeNote : ""}`, icon: "star", owner: null, done: !!checks[key], kind: "event", costume: true });
+        items.push({ key, label: `${e.title}${e.costumeNote ? " — " + e.costumeNote : ""}`, icon: "star", owner: null, escort: e.escort, done: !!checks[key], kind: "event", costume: true });
       }
     }
   }
@@ -986,9 +682,9 @@ function urgentItems(state) {
           else if (n <= 1) out.push({ tone: "amber", icon: Coins, text: `${c.name}: ${p.label} due ${fmtNice(p.due)} (${money(p.amount)})`, child: c });
         }
       }
-    }
-    if (c.modules?.lunches && c.lunchBalance <= c.lunchThreshold) {
-      out.push({ tone: "red", icon: Utensils, text: `${c.name}: lunch balance low (${money(c.lunchBalance)})`, child: c });
+      if (c.modules?.lunches && c.lunchBalance <= c.lunchThreshold) {
+        out.push({ tone: "red", icon: Utensils, text: `${c.name}: lunch balance low (${money(c.lunchBalance)})`, child: c });
+      }
     }
     if (c.modules?.bookings) {
       for (const b of c.bookings) {
@@ -1020,14 +716,16 @@ function urgentItems(state) {
    Screen: Today
    ============================================================ */
 function Today({ ctx }) {
-  const { state, adultById, toggleCheck, updateOneoff, openOwner, setTab, setActiveChildId } = ctx;
+  const { state, adultById, toggleCheck, updateOneoff, openOwner, setTab, setActiveChildId, setModal } = ctx;
   const tISO = iso(today0());
   const tomISO = iso(addDays(today0(), 1));
   const urgent = urgentItems(state);
+  const todaysDiary = state.diary.filter((d) => d.date === tISO);
 
   const NeedRow = ({ child, n }) => {
     const Icon = RECUR_ICONS[n.icon] || Sparkles;
     const owner = adultById(n.owner);
+    const esc = escortLabel(n.escort, adultById);
     const onToggle = () => { if (n.kind === "oneoff") updateOneoff({ id: n.id, done: !n.done }); else toggleCheck(n.key); };
     const target = n.kind === "oneoff"
       ? { kind: "oneoff", id: n.id }
@@ -1042,7 +740,10 @@ function Today({ ctx }) {
           justifyContent: "center", flexShrink: 0,
         }}>{n.done && <Check size={15} color="#fff" strokeWidth={3} />}</button>
         <Icon size={17} style={{ color: child.color, flexShrink: 0 }} strokeWidth={2.2} />
-        <span style={{ flex: 1, font: "500 14.5px Inter", color: n.done ? T.faint : T.ink, textDecoration: n.done ? "line-through" : "none" }}>{n.label}</span>
+        <div style={{ flex: 1 }}>
+          <span style={{ font: "500 14.5px Inter", color: n.done ? T.faint : T.ink, textDecoration: n.done ? "line-through" : "none" }}>{n.label}</span>
+          {esc && <div style={{ font: "500 11.5px Inter", color: T.faint, marginTop: 1 }}>🚗 {esc}</div>}
+        </div>
         {n.kind === "oneoff" || n.kind === "recurring"
           ? <OwnerRow adults={state.adults} owner={owner} onPick={() => target ? openOwner(target) : null} compact />
           : (owner ? <Avatar adult={owner} size={22} /> : null)}
@@ -1080,6 +781,41 @@ function Today({ ctx }) {
 
   return (
     <div>
+      {/* tonight's parent diary — who's out, sitter status */}
+      {todaysDiary.length > 0 && (
+        <Card style={{ marginBottom: 4, border: `1px solid ${T.line}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <Clock size={16} color={T.brand} strokeWidth={2.4} />
+            <span style={{ font: "700 14px Bricolage Grotesque", color: T.ink }}>Today's diary</span>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+            {todaysDiary.map((d) => {
+              const a = adultById(d.adultId);
+              const sitterSorted = d.needsSitter && d.sitterName.trim();
+              return (
+                <button key={d.id} onClick={() => setModal({ type: "diary", data: { item: d } })} style={{
+                  display: "flex", alignItems: "center", gap: 10, background: "transparent", border: "none",
+                  textAlign: "left", cursor: "pointer", padding: 0, width: "100%",
+                }}>
+                  <Avatar adult={a} size={26} />
+                  <div style={{ flex: 1 }}>
+                    <span style={{ font: "500 14px Inter", color: T.ink }}>{a ? `${a.name}: ` : ""}{d.label}</span>
+                    {d.needsSitter && (
+                      <div style={{ marginTop: 3 }}>
+                        {sitterSorted
+                          ? <Pill bg={T.greenSoft} fg={T.green}><Check size={12} /> {d.sitterName}{d.sitterArrival ? ` · ${d.sitterArrival}` : ""}</Pill>
+                          : <Pill bg={T.redSoft} fg={T.red}><AlertTriangle size={12} /> Babysitter needed</Pill>}
+                      </div>
+                    )}
+                  </div>
+                  <ChevronRight size={15} color={T.faint} />
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
       {/* urgent banner */}
       {urgent.length > 0 && (
         <Card style={{ background: T.redSoft, border: `1px solid ${T.red}33`, marginBottom: 4 }}>
@@ -1102,8 +838,8 @@ function Today({ ctx }) {
         </Card>
       )}
 
-      <DayBlock label="Today" dISO={tISO} />
       <DayBlock label="Tomorrow's briefing" dISO={tomISO} />
+      <DayBlock label="Today" dISO={tISO} />
       <div style={{ height: 16 }} />
     </div>
   );
@@ -1276,12 +1012,14 @@ function Kids({ ctx }) {
               {[...child.events].sort((a, b) => a.date.localeCompare(b.date)).map((e, i) => {
                 const Icon = e.costume ? Sparkles : showIcon(e.type);
                 const past = daysUntil(e.date) < 0;
+                const esc = escortLabel(e.escort, adultById);
                 return (
                   <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "11px 0", borderTop: i ? `1px solid ${T.line}` : "none", opacity: past ? 0.5 : 1 }}>
                     <Icon size={18} color={e.costume ? T.amber : child.color} strokeWidth={2.2} style={{ flexShrink: 0 }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ font: "550 14.5px Inter", color: T.ink }}>{e.title}</div>
                       <div style={{ font: "500 12px Inter", color: T.faint }}>{fmtNice(e.date)} · {e.costume ? "Costume needed" : eventTypeLabel(e.type)}</div>
+                      {esc && <div style={{ marginTop: 4 }}><Pill bg={T.greySoft} fg={T.muted}><Footprints size={11} /> {esc}</Pill></div>}
                     </div>
                     <IconBtn icon={Pencil} label="Edit" onClick={() => setModal({ type: "event", data: { childId: child.id, item: e } })} />
                     <IconBtn icon={Trash2} label="Delete" color={T.red} onClick={() => deleteIn(child.id, "events", e.id)} />
@@ -1319,13 +1057,18 @@ function Kids({ ctx }) {
           <SectionTitle action={<IconBtn icon={Plus} label="Add club" onClick={() => setModal({ type: "club", data: { childId: child.id } })} />}>Clubs & activities</SectionTitle>
           {child.clubs.length === 0
             ? <Empty icon={Footprints} title="No clubs yet" />
-            : child.clubs.map((cl) => (
+            : child.clubs.map((cl) => {
+              const esc = escortLabel(cl.escort, adultById);
+              return (
               <Card key={cl.id} style={{ marginBottom: 10 }} accent={child.color}>
                 <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ font: "650 15px Bricolage Grotesque", color: T.ink }}>{cl.name}</div>
                     <div style={{ font: "500 12.5px Inter", color: T.muted, marginTop: 2 }}>{[cl.day, cl.time, cl.location].filter(Boolean).join(" · ")}</div>
-                    {cl.kit && <div style={{ marginTop: 6 }}><Pill bg={T.brandSoft} fg={T.brand}><Backpack size={12} /> {cl.kit}</Pill></div>}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                      {cl.kit && <Pill bg={T.brandSoft} fg={T.brand}><Backpack size={12} /> {cl.kit}</Pill>}
+                      {esc && <Pill bg={T.greySoft} fg={T.muted}><Footprints size={12} /> {esc}</Pill>}
+                    </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                     <OwnerRow adults={state.adults} owner={adultById(cl.owner)} onPick={() => openOwner({ kind: "in", childId: child.id, key: "clubs", id: cl.id })} compact />
@@ -1336,7 +1079,8 @@ function Kids({ ctx }) {
                   </div>
                 </div>
               </Card>
-            ))}
+              );
+            })}
         </>
       )}
 
@@ -1539,35 +1283,40 @@ function More({ ctx, onReset }) {
           </Card>
         )))}
 
-      {/* household */}
-      <SectionTitle>Sharing & sync</SectionTitle>
-      <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 42, height: 42, borderRadius: 12, background: T.brandSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Users size={20} color={T.brand} strokeWidth={2.2} />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ font: "500 12px Inter", color: T.muted }}>Household code</div>
-            <div style={{ font: "800 20px Bricolage Grotesque", color: T.brand, letterSpacing: "0.04em" }}>{ctx.household || "—"}</div>
-          </div>
-          <Button variant="line" style={{ padding: "9px 12px", fontSize: 13 }} onClick={() => { try { navigator.clipboard?.writeText(ctx.household); ctx.flash("Code copied"); } catch { ctx.flash(ctx.household); } }}>Copy</Button>
-        </div>
-        <p style={{ font: "500 12.5px Inter", color: T.faint, lineHeight: 1.55, margin: "12px 0 0" }}>
-          {store.isCloud()
-            ? "Your partner enters this code (Join with a code) on their phone — then every change syncs between you live."
-            : "Single-device mode: this code only works on this device until cloud sync is configured (see README)."}
-        </p>
-        <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <Button variant="ghost" onClick={() => { if (confirm("Switch or leave this household? You'll be asked for a code again on this device.")) ctx.switchHousehold(); }}>Switch household</Button>
-          {store.isCloud() && ctx.user && (
-            <Button variant="ghost" onClick={() => { if (confirm("Sign out of " + (ctx.user.email || "your account") + "?")) ctx.signOut(); }}>Sign out</Button>
-          )}
-        </div>
-        {store.isCloud() && ctx.user?.email && (
-          <div style={{ font: "500 11.5px Inter", color: T.faint, marginTop: 6 }}>Signed in as {ctx.user.email}</div>
-        )}
-      </Card>
+      {/* parent diary */}
+      <SectionTitle action={<IconBtn icon={Plus} label="Add diary entry" onClick={() => setModal({ type: "diary", data: { defaultAdultId: state.adults[0]?.id } })} />}>Parent diary</SectionTitle>
+      {(() => {
+        const upcoming = [...state.diary].filter((d) => daysUntil(d.date) >= -1).sort((a, b) => a.date.localeCompare(b.date));
+        if (upcoming.length === 0) return <Empty icon={CalendarDays} title="Nothing on the diary" hint="Log evenings out — and whether a babysitter's needed — so it's visible to both of you." />;
+        return upcoming.map((d) => {
+          const a = adultById(d.adultId);
+          const sitterSorted = d.needsSitter && d.sitterName.trim();
+          return (
+            <Card key={d.id} accent={a?.color} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <Avatar adult={a} size={32} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ font: "650 15px Bricolage Grotesque", color: T.ink }}>{a ? `${a.name}: ` : ""}{d.label}</div>
+                  <div style={{ font: "500 12.5px Inter", color: T.muted, marginTop: 2 }}>{fmtNice(d.date)}</div>
+                  {d.needsSitter && (
+                    <div style={{ marginTop: 6 }}>
+                      {sitterSorted
+                        ? <Pill bg={T.greenSoft} fg={T.green}><Check size={12} /> {d.sitterName}{d.sitterArrival ? ` · ${d.sitterArrival}` : ""}</Pill>
+                        : <Pill bg={T.redSoft} fg={T.red}><AlertTriangle size={12} /> Babysitter needed</Pill>}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <IconBtn icon={Pencil} label="Edit" onClick={() => setModal({ type: "diary", data: { item: d } })} />
+                  <IconBtn icon={Trash2} label="Delete" color={T.red} onClick={() => ctx.deleteDiary(d.id)} />
+                </div>
+              </div>
+            </Card>
+          );
+        });
+      })()}
 
+      {/* household */}
       <SectionTitle action={<IconBtn icon={Plus} label="Add adult" onClick={() => setModal({ type: "adult" })} />}>Household</SectionTitle>
       <Card style={{ padding: "4px 14px" }}>
         {state.adults.map((a, i) => (
@@ -1610,6 +1359,7 @@ function Modals({ modal, ctx, close, onReset }) {
     case "event": return <EventEditor ctx={ctx} close={close} childId={data.childId} item={data.item} />;
     case "party": return <PartyEditor ctx={ctx} close={close} childId={data.childId} item={data.item} />;
     case "adult": return <AdultEditor ctx={ctx} close={close} adult={data} />;
+    case "diary": return <DiaryEditor ctx={ctx} close={close} item={data?.item} defaultAdultId={data?.defaultAdultId} />;
     case "balance": return <BalanceEditor ctx={ctx} close={close} child={data} />;
     case "owner": return <OwnerSheet ctx={ctx} close={close} target={data} />;
     case "email": return <EmailCapture ctx={ctx} close={close} />;
@@ -1768,7 +1518,7 @@ function PaymentEditor({ ctx, close, childId, item }) {
 
 /* ---- Club editor ---- */
 function ClubEditor({ ctx, close, childId, item }) {
-  const [f, setF] = useState(item || { name: "", day: "Mon", time: "", location: "", kit: "", owner: null });
+  const [f, setF] = useState(item || { name: "", day: "Mon", time: "", location: "", kit: "", owner: null, escort: null });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const save = () => { if (!f.name.trim()) return; ctx.upsertIn(childId, "clubs", f); close(); };
   return (
@@ -1783,7 +1533,8 @@ function ClubEditor({ ctx, close, childId, item }) {
         <div style={{ flex: 1 }}><Field label="Location"><TextInput value={f.location} placeholder="School field" onChange={(e) => set("location", e.target.value)} /></Field></div>
       </div>
       <Field label="Kit needed (shows in the daily list)"><TextInput value={f.kit} placeholder="Boots + shin pads" onChange={(e) => set("kit", e.target.value)} /></Field>
-      <Field label="Drop-off / pick-up"><OwnerPickInline adults={ctx.adults} value={f.owner} onChange={(v) => set("owner", v)} /></Field>
+      <Field label="Who's taking / collecting?"><EscortPicker adults={ctx.adults} value={f.escort} onChange={(v) => set("escort", v)} /></Field>
+      <Field label="Who's organising this (owner)"><OwnerPickInline adults={ctx.adults} value={f.owner} onChange={(v) => set("owner", v)} /></Field>
     </Sheet>
   );
 }
@@ -1825,7 +1576,7 @@ function BookingEditor({ ctx, close, childId, item }) {
 /* ---- Key date / event editor ---- */
 function EventEditor({ ctx, close, childId, item }) {
   const [cid, setCid] = useState(childId);
-  const [f, setF] = useState(item || { title: "", date: iso(addDays(today0(), 21)), type: "trip", costume: false });
+  const [f, setF] = useState(item || { title: "", date: iso(addDays(today0(), 21)), type: "trip", costume: false, escort: null });
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
   const setType = (t) => setF((p) => ({ ...p, type: t, costume: t === "dressup" ? true : p.costume }));
   const save = () => { if (!f.title.trim()) return; ctx.upsertIn(cid, "events", f); ctx.flash(item ? "Saved" : "Key date added"); close(); };
@@ -1849,6 +1600,7 @@ function EventEditor({ ctx, close, childId, item }) {
       <Field label="Costume needed? (flags an early heads-up in the daily list)">
         <Toggle on={!!f.costume} onClick={() => set("costume", !f.costume)} />
       </Field>
+      <Field label="Who's taking / collecting?"><EscortPicker adults={ctx.adults} value={f.escort} onChange={(v) => set("escort", v)} /></Field>
     </Sheet>
   );
 }
@@ -1898,6 +1650,49 @@ function AdultEditor({ ctx, close, adult }) {
           {palette.map((c) => <button key={c} onClick={() => set("color", c)} style={{ width: 34, height: 34, borderRadius: 999, background: c, border: f.color === c ? `3px solid ${T.ink}` : `2px solid ${c}`, cursor: "pointer" }} />)}
         </div>
       </Field>
+    </Sheet>
+  );
+}
+
+/* ---- Parent diary editor: out-this-evening + babysitter status ---- */
+function DiaryEditor({ ctx, close, item, defaultAdultId }) {
+  const [f, setF] = useState(item || {
+    adultId: defaultAdultId || ctx.adults[0]?.id || null,
+    date: iso(today0()),
+    label: "",
+    needsSitter: false,
+    sitterName: "",
+    sitterArrival: "",
+  });
+  const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
+  const save = () => { if (!f.adultId || !f.label.trim()) return; ctx.upsertDiary(f); ctx.flash(item ? "Saved" : "Added to diary"); close(); };
+  return (
+    <Sheet title={item ? "Edit diary entry" : "Add to parent diary"} onClose={close}
+      footer={<><Button style={{ flex: 1 }} onClick={save} icon={Check}>Save</Button>{item && <Button variant="danger" onClick={() => { ctx.deleteDiary(item.id); close(); }} icon={Trash2}> </Button>}</>}>
+      <Field label="Who's out?">
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {ctx.adults.map((a) => (
+            <button key={a.id} onClick={() => set("adultId", a.id)} style={{
+              display: "flex", alignItems: "center", gap: 7, padding: "7px 12px 7px 5px", borderRadius: 999,
+              border: `1.5px solid ${f.adultId === a.id ? T.brand : T.line}`, background: f.adultId === a.id ? T.brandSoft : T.card, cursor: "pointer",
+            }}><Avatar adult={a} size={22} /><span style={{ font: "600 13.5px Inter", color: T.ink }}>{a.name}</span></button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Date"><TextInput type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></Field>
+      <Field label="What's on?"><TextInput autoFocus value={f.label} placeholder="e.g. Work dinner, five-a-side, night out" onChange={(e) => set("label", e.target.value)} /></Field>
+      <Field label="Babysitter needed?">
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Toggle on={!!f.needsSitter} onClick={() => set("needsSitter", !f.needsSitter)} />
+          <span style={{ font: "500 13.5px Inter", color: T.muted }}>{f.needsSitter ? "Yes — show as needed until confirmed" : "No"}</span>
+        </div>
+      </Field>
+      {f.needsSitter && (
+        <>
+          <Field label="Who's confirmed? (leave blank until sorted)"><TextInput value={f.sitterName} placeholder="e.g. Maya, or Grandma Jean" onChange={(e) => set("sitterName", e.target.value)} /></Field>
+          <Field label="Arriving at"><TextInput value={f.sitterArrival} placeholder="e.g. 6:30pm" onChange={(e) => set("sitterArrival", e.target.value)} /></Field>
+        </>
+      )}
     </Sheet>
   );
 }
@@ -2030,15 +1825,14 @@ function parseEmail(text, children) {
     if (sl.includes("tomorrow")) date = iso(addDays(t, 1));
 
     const amt = s.match(/£\s?(\d+(?:\.\d{1,2})?)/);
-    const isPay = /\b(pay|paying|payment|cost|costs|fee|fees|deposit)\b/.test(sl);
-    const isForm = /\b(form|consent|permission|return|sign)\b/.test(sl);
+    const isPay = /pay|cost|£|fee|deposit/.test(sl);
+    const isForm = /form|consent|permission|return|sign/.test(sl);
     const isDress = /dress|costume|world book day|pyjama|pajama|wear|character/.test(sl);
 
     if (!date && !amt) continue;
 
     let type = "event";
-    if (isDress) type = "event";
-    else if (isPay || amt) type = "payment";
+    if (isPay || amt) type = "payment";
     else if (isForm) type = "form";
 
     // a short label from the sentence
