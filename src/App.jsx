@@ -3,7 +3,7 @@ import {
   Home, CalendarDays, Users, Wallet, MoreHorizontal, Plus, Check, Clock,
   AlertTriangle, Shirt, BookOpen, Utensils, Music, Waves, PartyPopper,
   FileText, Bell, Pencil, Trash2, X, ChevronRight, Mail, Sparkles,
-  MapPin, Sun, Inbox, Footprints, Ticket, ShoppingBag, Backpack, Coins
+  MapPin, Sun, Inbox, Footprints, Ticket, ShoppingBag, Backpack, Coins, HelpCircle
 } from "lucide-react";
 import { store } from "./store";
 
@@ -44,7 +44,13 @@ const RECUR_ICONS = {
 const midnight = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const today0 = () => midnight(new Date());
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return midnight(x); };
-const iso = (d) => midnight(d).toISOString().slice(0, 10);
+const iso = (d) => {
+  const x = midnight(d);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
 const parseISO = (s) => midnight(new Date(s + "T00:00:00"));
 const wkday = (d) => WEEKDAYS[new Date(d).getDay()];
 const sameDay = (a, b) => iso(a) === iso(b);
@@ -367,6 +373,132 @@ function OwnerRow({ adults, owner, onPick, compact }) {
 /* ============================================================
    Main App
    ============================================================ */
+/* ============================================================
+   Beam — the app's original helper character
+   A small glass capsule with a teal liquid fill, echoing the
+   app's own icon. Used in the tutorial walkthrough.
+   ============================================================ */
+function Beam({ size = 120, pose = "wave", style }) {
+  const poses = {
+    wave: { arm: "M142 120 Q166 108 172 84", hand: { x: 172, y: 84 } },
+    point: { arm: "M142 112 Q170 100 184 96", hand: { x: 184, y: 96 } },
+    rest: { arm: "M142 128 Q164 130 170 118", hand: { x: 170, y: 118 } },
+    cheer: { arm: "M142 104 Q168 84 176 60", hand: { x: 176, y: 60 } },
+  };
+  const p = poses[pose] || poses.wave;
+  return (
+    <svg width={size} height={size * 1.1} viewBox="0 0 200 220" style={style}>
+      <defs>
+        <linearGradient id="beamFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#3FC9A6" />
+          <stop offset="100%" stopColor="#0E5C4D" />
+        </linearGradient>
+        <linearGradient id="beamGlass" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.8" />
+          <stop offset="100%" stopColor="#D8EFE9" stopOpacity="0.35" />
+        </linearGradient>
+      </defs>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <rect key={i} x={92 + i * 6 - 12} y="8" width="5" height="20" rx="2.5"
+          fill="#F2C14E" transform={`rotate(${(i - 2) * 14} 100 18)`} opacity="0.9" />
+      ))}
+      <rect x="55" y="40" width="90" height="130" rx="38" fill="url(#beamGlass)" stroke="#FFFFFF" strokeWidth="3" />
+      <rect x="55" y="40" width="90" height="130" rx="38" fill="none" stroke="#137A66" strokeOpacity="0.2" strokeWidth="2" />
+      <clipPath id="beamClip"><rect x="55" y="40" width="90" height="130" rx="38" /></clipPath>
+      <rect x="55" y="105" width="90" height="65" fill="url(#beamFill)" clipPath="url(#beamClip)" opacity="0.92" />
+      <rect x="66" y="52" width="12" height="55" rx="6" fill="#fff" opacity="0.5" />
+      <ellipse cx="80" cy="103" rx="8" ry="10" fill="#0E3D33" />
+      <ellipse cx="120" cy="103" rx="8" ry="10" fill="#0E3D33" />
+      <circle cx="77.5" cy="99.5" r="2.3" fill="#fff" />
+      <circle cx="117.5" cy="99.5" r="2.3" fill="#fff" />
+      <path d="M78 122 Q100 136 122 122" stroke="#0E3D33" strokeWidth="4" fill="none" strokeLinecap="round" />
+      <ellipse cx="68" cy="113" rx="6" ry="4" fill="#F2845C" opacity="0.3" />
+      <ellipse cx="132" cy="113" rx="6" ry="4" fill="#F2845C" opacity="0.3" />
+      <path d={p.arm} stroke="#3FC9A6" strokeWidth="9" fill="none" strokeLinecap="round" />
+      <circle cx={p.hand.x} cy={p.hand.y} r="9" fill="#3FC9A6" stroke="#fff" strokeWidth="2" />
+      <rect x="68" y="168" width="64" height="14" rx="7" fill="#0E5C4D" opacity="0.5" />
+    </svg>
+  );
+}
+
+/* ============================================================
+   Tutorial — Beam walks through the app's main screens.
+   Shown once automatically the first time someone reaches the
+   main app on a given device, replayable any time via the help
+   icon in the header. Tracked in localStorage (per device), not
+   in the synced household state — so each parent sees it once
+   on their own device, and dismissing it doesn't hide it for
+   the other parent.
+   ============================================================ */
+const TUTORIAL_KEY = "familyAdmin:tutorialSeen";
+const TUTORIAL_STEPS = [
+  {
+    pose: "wave",
+    title: "This is Today",
+    body: "Your glanceable home screen. It shows what each kid needs today and tomorrow — kit, lunch, costumes, anything urgent. It's read-only on purpose: editing happens in Week and Kids.",
+  },
+  {
+    pose: "point",
+    title: "Week is your calendar",
+    body: "Every dated thing — trips, payments, deadlines, forms — lands here for the next two weeks. \"Who's got what\" shows tasks grouped by the parent who owns them.",
+  },
+  {
+    pose: "rest",
+    title: "Kids is where you set things up",
+    body: "Each child gets their own school, lunch schedule, weekly kit list, clubs, and key dates. Turn whole modules on or off per child — only show what that family actually needs.",
+  },
+  {
+    pose: "cheer",
+    title: "Money tracks payments & lunch balance",
+    body: "A simple checklist for trips, photos, and fundraisers, plus a lunch balance tracker with a reliable low-balance reminder — no school system silently failing to warn you.",
+  },
+  {
+    pose: "point",
+    title: "Paste in an email or WhatsApp message",
+    body: "In the More tab, tap \"Paste an email or newsletter.\" Copy the text from an email, newsletter, or WhatsApp message and paste it in — I'll suggest dates, payments, and forms. Nothing's added automatically: you review and confirm each one first, so you stay in control.",
+  },
+  {
+    pose: "wave",
+    title: "One parent owns each task",
+    body: "Tap any avatar to assign an owner. One person handles it end-to-end, so nothing quietly becomes the default parent's job. Tap the help icon any time to see this again.",
+  },
+];
+
+const tutorialShell = {
+  position: "fixed", inset: 0, background: T.bg, zIndex: 90,
+  display: "flex", justifyContent: "center", overflowY: "auto",
+};
+function Tutorial({ onDone }) {
+  const [i, setI] = useState(0);
+  const step = TUTORIAL_STEPS[i];
+  const last = i === TUTORIAL_STEPS.length - 1;
+  return (
+    <div style={tutorialShell}>
+      <div style={{ width: "100%", maxWidth: 460, minHeight: "100vh", display: "flex", flexDirection: "column", padding: "20px 22px 28px" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          <IconBtn icon={X} label="Close tutorial" onClick={onDone} />
+        </div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" }}>
+          <Beam size={130} pose={step.pose} />
+          <h2 style={{ font: "700 23px Bricolage Grotesque", color: T.ink, margin: "20px 0 8px" }}>{step.title}</h2>
+          <p style={{ font: "500 14.5px Inter", color: T.muted, lineHeight: 1.6, maxWidth: 320 }}>{step.body}</p>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 18, justifyContent: "center" }}>
+          {TUTORIAL_STEPS.map((_, k) => (
+            <div key={k} style={{ width: k === i ? 20 : 7, height: 7, borderRadius: 999, background: k === i ? T.brand : T.line, transition: "width .15s" }} />
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {i > 0 && <Button variant="line" style={{ flex: 1 }} onClick={() => setI(i - 1)}>Back</Button>}
+          <Button style={{ flex: 2 }} onClick={() => (last ? onDone() : setI(i + 1))} icon={last ? Check : ChevronRight}>
+            {last ? "Got it" : "Next"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -376,6 +508,7 @@ export default function App() {
   const [modal, setModal] = useState(null); // {type, data}
   const [activeChildId, setActiveChildId] = useState(null);
   const [toast, setToast] = useState(null);
+  const [showTutorial, setShowTutorial] = useState(false);
   const skipNextSave = useRef(false);
 
   // Resolve who's signed in (cloud mode), and keep it current
@@ -407,6 +540,9 @@ export default function App() {
       setState(init);
       setActiveChildId(init.children[0]?.id || null);
       setLoading(false);
+      try {
+        if (!localStorage.getItem(TUTORIAL_KEY)) setShowTutorial(true);
+      } catch (e) { /* localStorage unavailable — skip the auto-tutorial, help icon still works */ }
       // live updates from the other parent's device
       unsub = store.subscribe(household, (remoteState) => {
         skipNextSave.current = true;      // applying a remote change shouldn't echo back out
@@ -489,7 +625,16 @@ export default function App() {
     const i = s.adults.findIndex((x) => x.id === a.id);
     if (i >= 0) s.adults[i] = { ...s.adults[i], ...a }; else s.adults.push({ id: uid("a"), ...a });
   });
-  const deleteAdult = (id) => update((s) => { s.adults = s.adults.filter((a) => a.id !== id); });
+  const deleteAdult = (id) => update((s) => {
+    s.adults = s.adults.filter((a) => a.id !== id);
+    const ownerKeys = ["recurring", "payments", "clubs", "forms", "bookings"];
+    for (const c of s.children) {
+      for (const key of ownerKeys) {
+        for (const item of c[key] || []) { if (item.owner === id) item.owner = null; }
+      }
+    }
+    for (const o of s.oneoffs) { if (o.owner === id) o.owner = null; }
+  });
 
   const addOneoff = (o) => update((s) => { s.oneoffs.push({ id: uid("o"), done: false, ...o }); });
   const updateOneoff = (o) => update((s) => { const i = s.oneoffs.findIndex((x) => x.id === o.id); if (i >= 0) s.oneoffs[i] = { ...s.oneoffs[i], ...o }; });
@@ -498,9 +643,10 @@ export default function App() {
   const toggleCheck = (key) => update((s) => { s.checks[key] = !s.checks[key]; });
 
   const applyOwner = (target, adultId) => update((s) => {
-    const c = s.children.find((x) => x.id === target.childId);
     if (target.kind === "oneoff") { const o = s.oneoffs.find((x) => x.id === target.id); if (o) o.owner = adultId; return; }
-    const arr = c[target.key]; const it = arr.find((x) => x.id === target.id); if (it) it.owner = adultId;
+    const c = s.children.find((x) => x.id === target.childId);
+    if (!c) return;
+    const arr = c[target.key]; const it = arr?.find((x) => x.id === target.id); if (it) it.owner = adultId;
   });
 
   const addReviewItems = (items) => update((s) => { s.reviewQueue.push(...items); });
@@ -544,11 +690,17 @@ export default function App() {
         <header style={shell.header}>
           <div>
             <div style={{ font: "600 12px Inter", letterSpacing: "0.06em", textTransform: "uppercase", color: T.faint }}>
-              {greeting()} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+              {greeting()} · {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
             </div>
             <div style={{ font: "700 22px Bricolage Grotesque", color: T.ink, marginTop: 1 }}>{state.settings.householdName}</div>
           </div>
-          <div style={{ display: "flex" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button onClick={() => setShowTutorial(true)} aria-label="Replay tutorial" className="fa-iconbtn" style={{
+              border: "none", background: T.brandSoft, color: T.brand, cursor: "pointer", width: 36, height: 36,
+              borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", marginRight: 4,
+            }}>
+              <HelpCircle size={19} strokeWidth={2.2} />
+            </button>
             {adults.map((a) => <span key={a.id} style={{ marginLeft: -6 }}><Avatar adult={a} size={32} /></span>)}
           </div>
         </header>
@@ -587,6 +739,14 @@ export default function App() {
       {/* modals */}
       {modal && <Modals modal={modal} ctx={ctx} close={() => setModal(null)} onReset={resetAll} />}
       {toast && <div className="fa-toast" style={shell.toast}>{toast}</div>}
+
+      {/* tutorial walkthrough — auto-shows once per device, replayable via header help icon */}
+      {showTutorial && (
+        <Tutorial onDone={() => {
+          setShowTutorial(false);
+          try { localStorage.setItem(TUTORIAL_KEY, "1"); } catch (e) { /* ignore */ }
+        }} />
+      )}
     </div>
   );
 }
@@ -826,9 +986,9 @@ function urgentItems(state) {
           else if (n <= 1) out.push({ tone: "amber", icon: Coins, text: `${c.name}: ${p.label} due ${fmtNice(p.due)} (${money(p.amount)})`, child: c });
         }
       }
-      if (c.modules?.lunches && c.lunchBalance <= c.lunchThreshold) {
-        out.push({ tone: "red", icon: Utensils, text: `${c.name}: lunch balance low (${money(c.lunchBalance)})`, child: c });
-      }
+    }
+    if (c.modules?.lunches && c.lunchBalance <= c.lunchThreshold) {
+      out.push({ tone: "red", icon: Utensils, text: `${c.name}: lunch balance low (${money(c.lunchBalance)})`, child: c });
     }
     if (c.modules?.bookings) {
       for (const b of c.bookings) {
@@ -1870,14 +2030,15 @@ function parseEmail(text, children) {
     if (sl.includes("tomorrow")) date = iso(addDays(t, 1));
 
     const amt = s.match(/£\s?(\d+(?:\.\d{1,2})?)/);
-    const isPay = /pay|cost|£|fee|deposit/.test(sl);
-    const isForm = /form|consent|permission|return|sign/.test(sl);
+    const isPay = /\b(pay|paying|payment|cost|costs|fee|fees|deposit)\b/.test(sl);
+    const isForm = /\b(form|consent|permission|return|sign)\b/.test(sl);
     const isDress = /dress|costume|world book day|pyjama|pajama|wear|character/.test(sl);
 
     if (!date && !amt) continue;
 
     let type = "event";
-    if (isPay || amt) type = "payment";
+    if (isDress) type = "event";
+    else if (isPay || amt) type = "payment";
     else if (isForm) type = "form";
 
     // a short label from the sentence
