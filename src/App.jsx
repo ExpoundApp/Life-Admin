@@ -1102,8 +1102,8 @@ function Today({ ctx }) {
         </Card>
       )}
 
-      <DayBlock label="Tomorrow's briefing" dISO={tomISO} />
       <DayBlock label="Today" dISO={tISO} />
+      <DayBlock label="Tomorrow's briefing" dISO={tomISO} />
       <div style={{ height: 16 }} />
     </div>
   );
